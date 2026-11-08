@@ -30,8 +30,8 @@ variable "your_ip" {
 
 variable "k8s_version" {
   type        = string
-  description = "Kubernetes minor version family for the apt repo (e.g. v1.31). CKS exam currently runs ~1.31."
-  default     = "v1.31"
+  description = "Kubernetes minor version family used by the startup script."
+  default     = "v1.36"
 }
 
 variable "control_plane_machine_type" {
@@ -43,10 +43,21 @@ variable "control_plane_machine_type" {
 variable "worker_machine_type" {
   type        = string
   description = "Worker node size"
-  default     = "e2-small"
+  default     = "e2-medium"
 }
 
 variable "cluster_name_prefix" {
+  type    = string
+  default = "k8s-lab"
+}
+
+variable "vm_status" {
   type        = string
-  default     = "cks-kubeadm"
+  description = "Desired VM status, or null to preserve the current status."
+  default     = null
+
+  validation {
+    condition     = var.vm_status == null ? true : contains(["RUNNING", "TERMINATED"], var.vm_status)
+    error_message = "vm_status must be RUNNING or TERMINATED."
+  }
 }

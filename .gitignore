@@ -1,0 +1,8 @@
+# Local provider cache, state and plans (may contain credentials).
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+.terraform.tfstate.lock.info

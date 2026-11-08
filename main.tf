@@ -8,9 +8,11 @@ terraform {
 }
 
 provider "google" {
-  project = var.project_id
-  region  = var.region
-  zone    = var.zone
+  # Preserve existing labels during adoption.
+  add_terraform_attribution_label = false
+  project                         = var.project_id
+  region                          = var.region
+  zone                            = var.zone
 }
 
 resource "google_project_service" "compute" {
@@ -19,15 +21,24 @@ resource "google_project_service" "compute" {
   disable_on_destroy = false
 }
 
-#############################
-# Firewall rules
-#############################
-# SSH from the user's IP (or 0.0.0.0/0 if they haven't set it).
+resource "google_compute_network" "lab" {
+  name                    = "${var.cluster_name_prefix}-vpc"
+  auto_create_subnetworks = false
+}
+
+resource "google_compute_subnetwork" "lab" {
+  name                     = "${var.cluster_name_prefix}-subnet"
+  region                   = var.region
+  network                  = google_compute_network.lab.id
+  ip_cidr_range            = "10.30.0.0/24"
+  private_ip_google_access = true
+}
+
 resource "google_compute_firewall" "ssh" {
   name          = "${var.cluster_name_prefix}-ssh"
-  network       = "default"
+  network       = google_compute_network.lab.id
   source_ranges = [var.your_ip]
-  target_tags   = ["cks-kubeadm"]
+  target_tags   = [var.cluster_name_prefix]
 
   allow {
     protocol = "tcp"
@@ -35,106 +46,96 @@ resource "google_compute_firewall" "ssh" {
   }
 }
 
-# Kubernetes API server (6443) — only from your IP.
-resource "google_compute_firewall" "k8s_api" {
-  name          = "${var.cluster_name_prefix}-api"
-  network       = "default"
-  source_ranges = [var.your_ip]
-  target_tags   = ["cks-kubeadm-cp"]
-
-  allow {
-    protocol = "tcp"
-    ports    = ["6443"]
-  }
-}
-
-# Internal cluster traffic between control plane <-> worker.
-# Calico VXLAN (4789/udp), kubelet (10250), NodePort (30000-32767),
-# etcd (2379-2380), control plane components.
 resource "google_compute_firewall" "internal" {
-  name        = "${var.cluster_name_prefix}-internal"
-  network     = "default"
-  source_tags = ["cks-kubeadm"]
-  target_tags = ["cks-kubeadm"]
+  name          = "${var.cluster_name_prefix}-internal"
+  network       = google_compute_network.lab.id
+  source_ranges = ["192.168.0.0/16", google_compute_subnetwork.lab.ip_cidr_range]
+  target_tags   = [var.cluster_name_prefix]
 
   allow {
-    protocol = "tcp"
-    ports    = ["2379-2380", "10250-10259", "30000-32767", "179", "5473"]
-  }
-  allow {
-    protocol = "udp"
-    ports    = ["4789", "8472"]
-  }
-  allow {
-    protocol = "ipip"
-  }
-  allow {
-    protocol = "icmp"
+    protocol = "all"
   }
 }
 
-#############################
-# Locals
-#############################
 locals {
   startup_script = templatefile("${path.module}/scripts/install-common.sh", {
     K8S_VERSION = var.k8s_version
   })
 }
 
-#############################
-# Control plane VM
-#############################
 resource "google_compute_instance" "control_plane" {
-  name         = "${var.cluster_name_prefix}-cp"
-  machine_type = var.control_plane_machine_type
-  zone         = var.zone
-  tags         = ["cks-kubeadm", "cks-kubeadm-cp"]
+  name           = "${var.cluster_name_prefix}-cp"
+  machine_type   = var.control_plane_machine_type
+  zone           = var.zone
+  can_ip_forward = true
+  desired_status = var.vm_status
+  tags           = [var.cluster_name_prefix, "${var.cluster_name_prefix}-cp"]
 
   boot_disk {
+    device_name = "persistent-disk-0"
     initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2204-lts"
+      image = "ubuntu-os-cloud/ubuntu-2404-noble-amd64-v20261021"
       size  = 30
+      type  = "pd-standard"
     }
   }
 
   network_interface {
-    network = "default"
+    subnetwork = google_compute_subnetwork.lab.id
+    network_ip = "10.30.0.2"
     access_config {}
   }
 
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
   metadata = {
-    ssh-keys        = "${var.ssh_user}:${file(var.ssh_public_key_path)}"
-    startup-script  = local.startup_script
+    block-project-ssh-keys = "true"
+    enable-oslogin         = "FALSE"
+    ssh-keys               = "${var.ssh_user}:${file(var.ssh_public_key_path)}"
+    startup-script         = local.startup_script
   }
 
   depends_on = [google_project_service.compute]
 }
 
-#############################
-# Worker VM
-#############################
 resource "google_compute_instance" "worker" {
-  name         = "${var.cluster_name_prefix}-w1"
-  machine_type = var.worker_machine_type
-  zone         = var.zone
-  tags         = ["cks-kubeadm"]
+  name           = "${var.cluster_name_prefix}-w1"
+  machine_type   = var.worker_machine_type
+  zone           = var.zone
+  can_ip_forward = true
+  desired_status = var.vm_status
+  tags           = [var.cluster_name_prefix]
 
   boot_disk {
+    device_name = "persistent-disk-0"
     initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2204-lts"
+      image = "ubuntu-os-cloud/ubuntu-2404-noble-amd64-v20261021"
       size  = 30
+      type  = "pd-standard"
     }
   }
 
   network_interface {
-    network = "default"
+    subnetwork = google_compute_subnetwork.lab.id
+    network_ip = "10.30.0.3"
     access_config {}
   }
 
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
   metadata = {
-    ssh-keys        = "${var.ssh_user}:${file(var.ssh_public_key_path)}"
-    startup-script  = local.startup_script
+    block-project-ssh-keys = "true"
+    enable-oslogin         = "FALSE"
+    ssh-keys               = "${var.ssh_user}:${file(var.ssh_public_key_path)}"
+    startup-script         = local.startup_script
   }
 
   depends_on = [google_project_service.compute]

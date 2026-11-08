@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Installs containerd + kubeadm/kubelet/kubectl on Ubuntu 22.04.
+# Installs containerd + kubeadm/kubelet/kubectl on Ubuntu 24.04.
 # Runs as root via GCP startup script. Idempotent on reboot.
 #
 # Templated by Terraform: ${K8S_VERSION} is substituted at apply time.
 set -euo pipefail
 
-# Bail early if already installed (rerun on reboot).
-if command -v kubeadm >/dev/null 2>&1; then
+# Skip package setup after a fully successful bootstrap; never reset a cluster.
+if test -f /var/lib/k8s-lab-ready; then
   exit 0
 fi
 
@@ -30,7 +30,7 @@ sysctl --system
 
 # --- 2. containerd ---
 apt-get update
-apt-get install -y containerd apt-transport-https ca-certificates curl gpg
+apt-get install -y containerd apt-transport-https ca-certificates curl gpg conntrack socat
 
 mkdir -p /etc/containerd
 containerd config default >/etc/containerd/config.toml
@@ -41,16 +41,16 @@ systemctl enable containerd
 # --- 3. kubeadm/kubelet/kubectl (from pkgs.k8s.io) ---
 mkdir -p -m 755 /etc/apt/keyrings
 curl -fsSL "https://pkgs.k8s.io/core:/stable:/${K8S_VERSION}/deb/Release.key" \
-  | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  | gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
 cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
 deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_VERSION}/deb/ /
 EOF
 
 apt-get update
-apt-get install -y kubelet kubeadm kubectl
+apt-get install -y --allow-change-held-packages kubelet kubeadm kubectl
 apt-mark hold kubelet kubeadm kubectl
 systemctl enable --now kubelet
 
 # Mark provisioning done so the user knows when to log in.
-touch /var/lib/cks-kubeadm-ready
+touch /var/lib/k8s-lab-ready
