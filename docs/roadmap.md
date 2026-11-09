@@ -8,9 +8,9 @@
 
 ## Phase 1 – Kubernetes & Infrastruktur
 
-- [ ] Bestehendes GCE-Kubernetes-Cluster starten
-- [ ] Kubernetes-Version und Node-Status prüfen
-- [ ] containerd-Version und Konfiguration prüfen
+- [x] Bestehendes GCE-Kubernetes-Cluster starten
+- [x] Kubernetes-Version und Node-Status prüfen
+- [x] containerd-Version und Konfiguration prüfen
 - [ ] Nested Virtualization auf GCE aktivieren
 - [ ] KVM-Verfügbarkeit (`/dev/kvm`) verifizieren
 - [ ] Dedizierten CPU-Worker für Sandboxes vorbereiten
