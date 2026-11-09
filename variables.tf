@@ -25,13 +25,13 @@ variable "ssh_public_key_path" {
 
 variable "your_ip" {
   type        = string
-  description = "Your IP in CIDR form (e.g. 1.2.3.4/32) — opens K8s API port 6443 only to you. Get from: curl ifconfig.me"
+  description = "Your IP in CIDR form (e.g. 1.2.3.4/32) — opens K8s API port 6443 only to you. Get from: curl -4 ifconfig.me"
 }
 
 variable "k8s_version" {
   type        = string
-  description = "Kubernetes minor version family for the apt repo (e.g. v1.31). CKS exam currently runs ~1.31."
-  default     = "v1.31"
+  description = "Kubernetes minor version for the pkgs.k8s.io apt repo (e.g. v1.37). kubeadm deploys the latest patch of this minor."
+  default     = "v1.37"
 }
 
 variable "control_plane_machine_type" {
@@ -42,11 +42,23 @@ variable "control_plane_machine_type" {
 
 variable "worker_machine_type" {
   type        = string
-  description = "Worker node size"
-  default     = "e2-small"
+  description = "Worker node size. e2-small (2 GB) is too tight for Cilium + workloads."
+  default     = "e2-medium"
 }
 
 variable "cluster_name_prefix" {
+  type    = string
+  default = "gcp-sec-lab"
+}
+
+variable "cilium_version" {
   type        = string
-  default     = "cks-kubeadm"
+  description = "Cilium version (without v). Check k8s compatibility: docs.cilium.io/en/stable/network/kubernetes/compatibility/. 1.20 is tested up to k8s 1.36."
+  default     = "1.20.4"
+}
+
+variable "cilium_cli_version" {
+  type        = string
+  description = "cilium-cli release tag used to install Cilium."
+  default     = "v0.20.2"
 }

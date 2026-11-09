@@ -129,8 +129,8 @@ Kubernetes Cluster
 
 **Phase 1 starten:**
 
-1. GCE-VM `k8s-lab-w1` starten.
-2. Kubernetes und containerd prüfen.
+1. Cluster mit `terraform apply` aufsetzen (dieses Repo, siehe README).
+2. Kubernetes, containerd und Cilium prüfen.
 3. KVM-Unterstützung verifizieren.
 4. Dedizierten Sandbox-Worker vorbereiten.
 
