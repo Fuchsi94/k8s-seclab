@@ -1,6 +1,6 @@
 # gcp-sec-lab
 
-A 2-node kubeadm cluster (1 control plane + 1 worker) on GCE VMs (Ubuntu 24.04, Kubernetes 1.37, Cilium), used as
+A 2-node kubeadm cluster (1 control plane + 1 worker) on GCE VMs (Ubuntu 24.04, Kubernetes 1.36, Cilium 1.20), used as
 the base for the security AI agent lab (see [docs/roadmap.md](docs/roadmap.md)).
 
 `terraform apply` brings up a working cluster: the startup script installs

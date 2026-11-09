@@ -30,8 +30,8 @@ variable "your_ip" {
 
 variable "k8s_version" {
   type        = string
-  description = "Kubernetes minor version for the pkgs.k8s.io apt repo (e.g. v1.37). kubeadm deploys the latest patch of this minor."
-  default     = "v1.37"
+  description = "Kubernetes minor version for the pkgs.k8s.io apt repo (e.g. v1.36). kubeadm deploys the latest patch of this minor. Keep it within the Cilium tested range."
+  default     = "v1.36"
 }
 
 variable "control_plane_machine_type" {
