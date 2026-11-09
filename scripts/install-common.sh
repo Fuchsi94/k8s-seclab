@@ -21,6 +21,23 @@ CILIUM_CLI_VERSION="${CILIUM_CLI_VERSION}"
 METADATA="http://metadata.google.internal/computeMetadata/v1/instance"
 export HOME=/root # startup scripts run without HOME; cilium CLI (helm) needs it
 
+# The GCE Ubuntu mirror sometimes times out right after boot. Retry network
+# steps instead of failing the whole bootstrap.
+retry() {
+  for i in 1 2 3 4 5; do
+    "$@" && return 0
+    echo "Attempt $i failed: $*"
+    sleep 15
+  done
+  return 1
+}
+
+# apt: retry single downloads and use IPv4 only (the VMs have no IPv6 route).
+cat >/etc/apt/apt.conf.d/80-retries <<EOF
+Acquire::Retries "5";
+Acquire::ForceIPv4 "true";
+EOF
+
 # --- 1. Packages (skipped if kubeadm is already installed) ---
 if ! command -v kubeadm >/dev/null 2>&1; then
   # Kernel prerequisites
@@ -42,8 +59,8 @@ EOF
   sysctl --system
 
   # containerd (+ conntrack, required by kubeadm preflight / kube-proxy)
-  apt-get update
-  apt-get install -y containerd conntrack apt-transport-https ca-certificates curl gpg
+  retry apt-get update
+  retry apt-get install -y containerd conntrack apt-transport-https ca-certificates curl gpg
 
   mkdir -p /etc/containerd
   containerd config default >/etc/containerd/config.toml
@@ -53,15 +70,16 @@ EOF
 
   # kubeadm/kubelet/kubectl from pkgs.k8s.io
   mkdir -p -m 755 /etc/apt/keyrings
-  curl -fsSL "https://pkgs.k8s.io/core:/stable:/${K8S_VERSION}/deb/Release.key" \
-    | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  retry curl -fsSL -o /tmp/k8s-release.key "https://pkgs.k8s.io/core:/stable:/${K8S_VERSION}/deb/Release.key"
+  gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key
+  rm -f /tmp/k8s-release.key
 
   cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
 deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_VERSION}/deb/ /
 EOF
 
-  apt-get update
-  apt-get install -y kubelet kubeadm kubectl
+  retry apt-get update
+  retry apt-get install -y kubelet kubeadm kubectl
   apt-mark hold kubelet kubeadm kubectl
   systemctl enable --now kubelet
 fi
@@ -101,8 +119,8 @@ if [ "$ROLE" = "controlplane" ]; then
     CLI_TGZ=cilium-linux-amd64.tar.gz
     CLI_URL="https://github.com/cilium/cilium-cli/releases/download/$CILIUM_CLI_VERSION/$CLI_TGZ"
     cd /tmp
-    curl -fsSLO "$CLI_URL"
-    curl -fsSLO "$CLI_URL.sha256sum"
+    retry curl -fsSLO "$CLI_URL"
+    retry curl -fsSLO "$CLI_URL.sha256sum"
     sha256sum --check "$CLI_TGZ.sha256sum"
     tar -xzf "$CLI_TGZ" -C /usr/local/bin
     rm -f "$CLI_TGZ" "$CLI_TGZ.sha256sum"
