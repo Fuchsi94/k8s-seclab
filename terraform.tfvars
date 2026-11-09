@@ -5,13 +5,11 @@ zone       = "europe-west3-a"
 ssh_user            = "yannick"
 ssh_public_key_path = "keys/lab.pub"
 
-# Find with: curl -s ifconfig.me
+# Find with: echo "$(curl -4 -s ifconfig.me)/32"  (IPv4!)
 # Update this every time your IP changes. Use 0.0.0.0/0 only as a last resort.
-your_ip = "193.5.234.182/32"
+your_ip = "85.7.26.122/32"
 
 k8s_version = "v1.36"
 
-cluster_name_prefix        = "k8s-lab"
-control_plane_machine_type = "e2-medium"
-worker_machine_type        = "e2-medium"
-vm_status                  = null # Preserve the existing stopped status.
+# null = leave VMs as they are, "RUNNING" = start, "TERMINATED" = stop
+vm_status = null
