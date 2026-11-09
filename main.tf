@@ -24,12 +24,32 @@ resource "google_project_service" "compute" {
 }
 
 #############################
+# Network
+#############################
+# Dedicated VPC: only the firewall rules below apply. The default VPC has
+# pre-existing rules that open SSH/RDP to the whole internet.
+resource "google_compute_network" "lab" {
+  name                    = "${var.cluster_name_prefix}-vpc"
+  auto_create_subnetworks = false
+
+  depends_on = [google_project_service.compute]
+}
+
+resource "google_compute_subnetwork" "lab" {
+  name                     = "${var.cluster_name_prefix}-subnet"
+  region                   = var.region
+  network                  = google_compute_network.lab.id
+  ip_cidr_range            = var.subnet_cidr
+  private_ip_google_access = true
+}
+
+#############################
 # Firewall rules
 #############################
-# SSH from your IP. Note: the default VPC also has default-allow-ssh (0.0.0.0/0).
+# SSH from your IP only.
 resource "google_compute_firewall" "ssh" {
   name          = "${var.cluster_name_prefix}-ssh"
-  network       = "default"
+  network       = google_compute_network.lab.id
   source_ranges = [var.your_ip]
   target_tags   = [var.cluster_name_prefix]
 
@@ -37,12 +57,16 @@ resource "google_compute_firewall" "ssh" {
     protocol = "tcp"
     ports    = ["22"]
   }
+
+  lifecycle {
+    replace_triggered_by = [google_compute_network.lab.id]
+  }
 }
 
-# Kubernetes API server (6443) — only from your IP.
+# Kubernetes API server (6443), control plane only, from your IP only.
 resource "google_compute_firewall" "k8s_api" {
   name          = "${var.cluster_name_prefix}-api"
-  network       = "default"
+  network       = google_compute_network.lab.id
   source_ranges = [var.your_ip]
   target_tags   = ["${var.cluster_name_prefix}-cp"]
 
@@ -50,28 +74,26 @@ resource "google_compute_firewall" "k8s_api" {
     protocol = "tcp"
     ports    = ["6443"]
   }
+
+  lifecycle {
+    replace_triggered_by = [google_compute_network.lab.id]
+  }
 }
 
-# Internal cluster traffic between control plane <-> worker.
-# API server (6443), etcd (2379-2380), kubelet + control plane components
-# (10250-10259), NodePort (30000-32767), Cilium health (4240), Hubble (4244),
-# Cilium VXLAN (8472/udp).
+# Everything between the nodes (API server, kubelet, etcd, Cilium VXLAN,
+# health checks, Hubble, ...). The subnet only contains lab nodes.
 resource "google_compute_firewall" "internal" {
-  name        = "${var.cluster_name_prefix}-internal"
-  network     = "default"
-  source_tags = [var.cluster_name_prefix]
-  target_tags = [var.cluster_name_prefix]
+  name          = "${var.cluster_name_prefix}-internal"
+  network       = google_compute_network.lab.id
+  source_ranges = [google_compute_subnetwork.lab.ip_cidr_range, var.pod_cidr]
+  target_tags   = [var.cluster_name_prefix]
 
   allow {
-    protocol = "tcp"
-    ports    = ["6443", "2379-2380", "10250-10259", "30000-32767", "4240", "4244"]
+    protocol = "all"
   }
-  allow {
-    protocol = "udp"
-    ports    = ["8472"]
-  }
-  allow {
-    protocol = "icmp"
+
+  lifecycle {
+    replace_triggered_by = [google_compute_network.lab.id]
   }
 }
 
@@ -101,6 +123,15 @@ locals {
     CILIUM_CLI_VERSION = var.cilium_cli_version
     JOIN_TOKEN         = local.join_token
     SSH_USER           = var.ssh_user
+    POD_CIDR           = var.pod_cidr
+  }
+
+  common_metadata = {
+    # Only the key below may log in; project-wide keys (e.g. added by
+    # `gcloud compute ssh`) are ignored.
+    block-project-ssh-keys = "true"
+    enable-oslogin         = "FALSE"
+    ssh-keys               = "${var.ssh_user}:${file(var.ssh_public_key_path)}"
   }
 }
 
@@ -108,62 +139,84 @@ locals {
 # Control plane VM
 #############################
 resource "google_compute_instance" "control_plane" {
-  name         = "${var.cluster_name_prefix}-cp"
-  machine_type = var.control_plane_machine_type
-  zone         = var.zone
-  tags         = [var.cluster_name_prefix, "${var.cluster_name_prefix}-cp"]
+  name           = "${var.cluster_name_prefix}-cp"
+  machine_type   = var.control_plane_machine_type
+  zone           = var.zone
+  can_ip_forward = true
+  desired_status = var.vm_status
+  tags           = [var.cluster_name_prefix, "${var.cluster_name_prefix}-cp"]
 
   boot_disk {
     initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+      image = var.image
       size  = 30
     }
   }
 
   network_interface {
-    network = "default"
+    subnetwork = google_compute_subnetwork.lab.id
     access_config {}
   }
 
-  metadata = {
-    ssh-keys = "${var.ssh_user}:${file(var.ssh_public_key_path)}"
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
+  metadata = merge(local.common_metadata, {
     startup-script = templatefile("${path.module}/scripts/install-common.sh", merge(local.startup_script_vars, {
       ROLE           = "controlplane"
       CP_INTERNAL_IP = ""
     }))
-  }
+  })
 
-  depends_on = [google_project_service.compute]
+  # The cluster is bound to the node IPs (certs, kubelet config). A new
+  # subnet means new IPs, so rebuild the VMs and let the bootstrap run again.
+  lifecycle {
+    replace_triggered_by = [google_compute_subnetwork.lab.id]
+  }
 }
 
 #############################
 # Worker VM
 #############################
 resource "google_compute_instance" "worker" {
-  name         = "${var.cluster_name_prefix}-w1"
-  machine_type = var.worker_machine_type
-  zone         = var.zone
-  tags         = [var.cluster_name_prefix]
+  name           = "${var.cluster_name_prefix}-w1"
+  machine_type   = var.worker_machine_type
+  zone           = var.zone
+  can_ip_forward = true
+  desired_status = var.vm_status
+  tags           = [var.cluster_name_prefix]
 
   boot_disk {
     initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+      image = var.image
       size  = 30
     }
   }
 
   network_interface {
-    network = "default"
+    subnetwork = google_compute_subnetwork.lab.id
     access_config {}
   }
 
-  metadata = {
-    ssh-keys = "${var.ssh_user}:${file(var.ssh_public_key_path)}"
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
+  metadata = merge(local.common_metadata, {
     startup-script = templatefile("${path.module}/scripts/install-common.sh", merge(local.startup_script_vars, {
       ROLE           = "worker"
       CP_INTERNAL_IP = google_compute_instance.control_plane.network_interface[0].network_ip
     }))
-  }
+  })
 
-  depends_on = [google_project_service.compute]
+  # The cluster is bound to the node IPs (certs, kubelet config). A new
+  # subnet means new IPs, so rebuild the VMs and let the bootstrap run again.
+  lifecycle {
+    replace_triggered_by = [google_compute_subnetwork.lab.id]
+  }
 }

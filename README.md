@@ -74,6 +74,18 @@ sudo google_metadata_script_runner startup
   Running VMs keep their installed version; it applies to new VMs.
 - If your IP changes, update `your_ip` and `terraform apply`. Only the firewall
   rules change.
-- The VMs are in the `default` VPC, which has pre-existing rules that open SSH
-  and RDP to `0.0.0.0/0`. `your_ip` therefore does **not** restrict SSH yet.
-  A dedicated VPC is planned.
+- The nodes live in their own VPC (`gcp-sec-lab-vpc`, subnet `10.30.0.0/24`).
+  From outside only SSH (all nodes) and 6443 (control plane) are open, both
+  only from `your_ip`. Between nodes everything is allowed.
+- Login only with the key in `keys/lab.pub` as `ssh_user`
+  (`ssh yannick@<ip>`). Project-wide keys are blocked, so `gcloud compute ssh`
+  does **not** work.
+
+## Start / stop
+
+Set `vm_status` in `terraform.tfvars` and apply:
+```bash
+terraform apply -var vm_status=TERMINATED   # stop all VMs
+terraform apply -var vm_status=RUNNING      # start all VMs
+```
+Stopped VMs only cost disk storage. Note the ephemeral control plane IP above.

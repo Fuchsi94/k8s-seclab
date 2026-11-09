@@ -62,3 +62,32 @@ variable "cilium_cli_version" {
   description = "cilium-cli release tag used to install Cilium."
   default     = "v0.20.2"
 }
+
+variable "image" {
+  type        = string
+  description = "Boot image for all nodes."
+  default     = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+}
+
+variable "subnet_cidr" {
+  type        = string
+  description = "CIDR of the lab subnet (node IPs)."
+  default     = "10.30.0.0/24"
+}
+
+variable "pod_cidr" {
+  type        = string
+  description = "Pod network CIDR (kubeadm --pod-network-cidr). Must not overlap subnet_cidr."
+  default     = "192.168.0.0/16"
+}
+
+variable "vm_status" {
+  type        = string
+  description = "Desired VM status: RUNNING, TERMINATED (stopped), or null to leave it as it is."
+  default     = null
+
+  validation {
+    condition     = var.vm_status == null ? true : contains(["RUNNING", "TERMINATED"], var.vm_status)
+    error_message = "vm_status must be RUNNING or TERMINATED."
+  }
+}
