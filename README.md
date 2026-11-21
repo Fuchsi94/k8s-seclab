@@ -12,7 +12,7 @@ Cilium, and the worker joins automatically.
 1. Put your public **IPv4** into `terraform.tfvars`:
    ```bash
    echo "$(curl -4 -s ifconfig.me)/32"
-   # your_ip = "X.X.X.X/32"  -> SSH (22) and API (6443) only from you
+   # allowed_ips = ["X.X.X.X/32"]  -> SSH (22) and API (6443) only from these IPs
    ```
 
 2. Apply:
@@ -72,11 +72,11 @@ sudo google_metadata_script_runner startup
   match; `kubeadm reset` + rerun the script, or re-issue the apiserver cert.
 - Changing `k8s_version` or the script only updates the VM metadata in place.
   Running VMs keep their installed version; it applies to new VMs.
-- If your IP changes, update `your_ip` and `terraform apply`. Only the firewall
+- If you work from a new place, add its IP to `allowed_ips` and `terraform apply`. Only the firewall
   rules change.
 - The nodes live in their own VPC (`gcp-sec-lab-vpc`, subnet `10.30.0.0/24`).
   From outside only SSH (all nodes) and 6443 (control plane) are open, both
-  only from `your_ip`. Between nodes everything is allowed.
+  only from `allowed_ips`. Between nodes everything is allowed.
 - Login only with the key in `keys/lab.pub` as `ssh_user`
   (`ssh yannick@<ip>`). Project-wide keys are blocked, so `gcloud compute ssh`
   does **not** work.

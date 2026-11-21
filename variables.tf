@@ -23,9 +23,14 @@ variable "ssh_public_key_path" {
   description = "Path to your SSH public key"
 }
 
-variable "your_ip" {
-  type        = string
-  description = "Your IP in CIDR form (e.g. 1.2.3.4/32) — opens K8s API port 6443 only to you. Get from: curl -4 ifconfig.me"
+variable "allowed_ips" {
+  type        = list(string)
+  description = "Public IPv4 addresses in CIDR form (e.g. 1.2.3.4/32) allowed to reach SSH (22) and the API server (6443). Get yours from: curl -4 ifconfig.me"
+
+  validation {
+    condition     = length(var.allowed_ips) > 0 && alltrue([for ip in var.allowed_ips : can(cidrhost(ip, 0))])
+    error_message = "allowed_ips must contain at least one valid CIDR, e.g. \"1.2.3.4/32\"."
+  }
 }
 
 variable "k8s_version" {

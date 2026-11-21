@@ -50,7 +50,7 @@ resource "google_compute_subnetwork" "lab" {
 resource "google_compute_firewall" "ssh" {
   name          = "${var.cluster_name_prefix}-ssh"
   network       = google_compute_network.lab.id
-  source_ranges = [var.your_ip]
+  source_ranges = var.allowed_ips
   target_tags   = [var.cluster_name_prefix]
 
   allow {
@@ -67,7 +67,7 @@ resource "google_compute_firewall" "ssh" {
 resource "google_compute_firewall" "k8s_api" {
   name          = "${var.cluster_name_prefix}-api"
   network       = google_compute_network.lab.id
-  source_ranges = [var.your_ip]
+  source_ranges = var.allowed_ips
   target_tags   = ["${var.cluster_name_prefix}-cp"]
 
   allow {
