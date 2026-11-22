@@ -1,0 +1,68 @@
+# Admission rules for the sandboxes namespace.
+#
+# sandboxes-claim-lifecycle: every SandboxClaim must expire. Without
+# shutdownTime a claim (and its sandbox) lives forever.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sandboxes-claim-lifecycle
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["extensions.agents.x-k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxclaims"]
+  validations:
+    - expression: >-
+        has(object.spec.lifecycle) && has(object.spec.lifecycle.shutdownTime)
+      message: "SandboxClaim needs spec.lifecycle.shutdownTime"
+    - expression: >-
+        has(object.spec.lifecycle) && has(object.spec.lifecycle.shutdownPolicy) &&
+        object.spec.lifecycle.shutdownPolicy in ['Delete', 'DeleteForeground']
+      message: "SandboxClaim needs spec.lifecycle.shutdownPolicy Delete or DeleteForeground"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sandboxes-claim-lifecycle
+spec:
+  policyName: sandboxes-claim-lifecycle
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: sandboxes
+---
+# sandboxes-pod-guard: no pod in the namespace gets a service account token.
+# Step 3 adds: runtimeClassName must be kata-clh.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sandboxes-pod-guard
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  validations:
+    - expression: >-
+        has(object.spec.automountServiceAccountToken) &&
+        object.spec.automountServiceAccountToken == false
+      message: "pods in sandboxes must set automountServiceAccountToken: false"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sandboxes-pod-guard
+spec:
+  policyName: sandboxes-pod-guard
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: sandboxes
