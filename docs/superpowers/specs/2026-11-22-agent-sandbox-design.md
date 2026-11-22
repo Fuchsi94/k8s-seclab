@@ -63,7 +63,7 @@ LLM-generierter Code.
 - Bootstrap der Nodes über `scripts/install-common.sh` (Startup-Script,
   idempotent). Cluster-Add-ons dieses Designs kommen **nicht** dorthin,
   sondern als Manifeste/Helm-Values unter `k8s/<komponente>/` plus je ein
-  idempotentes Install-Skript, das vom Laptop mit der Lab-kubeconfig läuft.
+  Kustomize-Verzeichnis (`kubectl apply -k`), das vom Laptop mit der Lab-kubeconfig läuft.
   *Meine Entscheidung:* Node-Bootstrap bleibt schlank, Add-ons lassen sich
   schnell iterieren.
 - Alle Versionen gepinnt.
@@ -84,7 +84,7 @@ Keine bestimmte Runtime nötig; Isolation kommt über die RuntimeClass.
   *Meine Entscheidung:* mit Extensions, weil der Orchestrator später
   Sandboxes über Claims aus Templates anfordert.
 - Namespace `sandboxes` mit einem `SandboxTemplate`. Der RuntimeClass-Name ist
-  eine Variable im Install-Skript (eine Stelle), in Schritt 1 leer (= runc),
+  ein Kustomize-Patch an einer Stelle, in Schritt 1 leer (= runc),
   in Schritt 3 `kata-clh`.
 - Maximale Lebensdauer für Sandboxes (`shutdownTime` o. ä. der API), damit
   vergessene Sandboxes verschwinden. *Meine Entscheidung.*
@@ -99,6 +99,18 @@ Keine bestimmte Runtime nötig; Isolation kommt über die RuntimeClass.
     kubeadm-Join-Token).
   - `automountServiceAccountToken: false` im Template.
   - Pod Security Admission: **offen, siehe "Offene Entscheidungen"**.
+- API-Details v1.0.12 (beim Planen geprüft):
+  - Ein `SandboxClaim` verweist nicht auf ein Template, sondern zwingend auf
+    einen `SandboxWarmPool` (`spec.warmPoolRef`), der auf das Template zeigt.
+    Kette: Template → WarmPool → Claim.
+  - Lebensdauer sitzt am Claim: `spec.lifecycle.shutdownTime` (absolut) und
+    `shutdownPolicy: Delete`. Ohne `shutdownTime` läuft ein Claim nie ab;
+    deshalb erzwingt eine `ValidatingAdmissionPolicy` in `sandboxes`, dass
+    jeder Claim eine `shutdownTime` und `shutdownPolicy: Delete` hat.
+  - Ohne Angabe legt der Controller pro Template eine NetworkPolicy an, die
+    Egress ins **öffentliche Internet erlaubt**. Deshalb
+    `networkPolicyManagement: Unmanaged`; die Absicherung macht unsere
+    eigene CiliumNetworkPolicy.
 - Sandbox Router (für SDK-Clients) wird **nicht** installiert; die
   Standard-Anleitung betreibt ihn ohne Authentifizierung. Kommt mit dem
   Orchestrator.
@@ -163,7 +175,7 @@ Keine bestimmte Runtime nötig; Isolation kommt über die RuntimeClass.
 - Kata per kata-deploy (Helm, gepinnt), nur auf `sandbox=true`. RuntimeClass
   `kata-clh` (Cloud Hypervisor) mit `scheduling.nodeSelector` + Toleration
   und Pod-Overhead.
-- Template-Variable auf `kata-clh` umstellen.
+- RuntimeClass-Patch in `kustomization.yaml` auf `kata-clh` setzen.
 - **Kata erzwingen:** `ValidatingAdmissionPolicy` in `sandboxes` lehnt jeden
   Pod ohne `runtimeClassName: kata-clh` ab. Sonst liefe ein Pod ohne
   RuntimeClass still mit `runc` auf `w1`. *Meine Entscheidung.*
