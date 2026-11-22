@@ -1,0 +1,27 @@
+# agent-sandbox for the lab cluster.
+#
+#   export KUBECONFIG=~/.kube/gcp-sec-lab
+#   kubectl apply --server-side -k k8s/agent-sandbox
+#   k8s/agent-sandbox/test.sh
+#
+# vendor/ holds the unmodified release manifest of kubernetes-sigs/agent-sandbox
+# v1.0.12 (sandbox-with-extensions.yaml), SHA-256
+# 1fe83dff2536a643edf7d001c4585d77155176f6d570204f408159d9ac9d0fe5.
+# To upgrade: download the new release file, check its hash, replace the file.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - vendor/sandbox-with-extensions-v1.0.12.yaml
+
+# Runtime for sandbox pods. Step 1: no runtimeClassName (runc). Step 3 (Kata):
+# uncomment and set the value to kata-clh.
+# patches:
+#   - target:
+#       group: extensions.agents.x-k8s.io
+#       kind: SandboxTemplate
+#       name: default
+#     patch: |-
+#       - op: add
+#         path: /spec/podTemplate/spec/runtimeClassName
+#         value: kata-clh
