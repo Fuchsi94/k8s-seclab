@@ -1,0 +1,42 @@
+# Sandbox template and warm pool. Claims always go through a warm pool:
+# SandboxTemplate -> SandboxWarmPool -> SandboxClaim.
+#
+# networkPolicyManagement: Unmanaged, because the controller's default policy
+# allows egress to the public internet. Network rules live in
+# 10-network-policy.yaml (Cilium).
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: default
+  namespace: sandboxes
+spec:
+  networkPolicyManagement: Unmanaged
+  podTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: agent-sandbox
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: sandbox
+          image: busybox:1.37
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+              ephemeral-storage: 100Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+              ephemeral-storage: 1Gi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: default
+  namespace: sandboxes
+spec:
+  replicas: 1
+  sandboxTemplateRef:
+    name: default

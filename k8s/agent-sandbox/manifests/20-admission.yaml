@@ -1,0 +1,125 @@
+# Admission rules for the sandboxes namespace. All bindings match the
+# namespace by its immutable kubernetes.io/metadata.name label.
+#
+# sandboxes-claim-lifecycle: every SandboxClaim must expire, at most 24h after
+# it was created. Without shutdownTime a claim (and its sandbox) lives forever.
+# The cap is measured from creationTimestamp, so updates cannot extend it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sandboxes-claim-lifecycle
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["extensions.agents.x-k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxclaims"]
+  validations:
+    - expression: >-
+        has(object.spec.lifecycle) && has(object.spec.lifecycle.shutdownTime)
+      message: "SandboxClaim needs spec.lifecycle.shutdownTime"
+    - expression: >-
+        has(object.spec.lifecycle) && has(object.spec.lifecycle.shutdownPolicy) &&
+        object.spec.lifecycle.shutdownPolicy in ['Delete', 'DeleteForeground']
+      message: "SandboxClaim needs spec.lifecycle.shutdownPolicy Delete or DeleteForeground"
+    - expression: >-
+        !has(object.spec.lifecycle) || !has(object.spec.lifecycle.shutdownTime) ||
+        timestamp(object.spec.lifecycle.shutdownTime) <=
+        timestamp(object.metadata.creationTimestamp) + duration('24h')
+      message: "SandboxClaim shutdownTime must be at most 24h after creation"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sandboxes-claim-lifecycle
+spec:
+  policyName: sandboxes-claim-lifecycle
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: sandboxes
+---
+# sandboxes-claim-fields: a claim may only pick a warm pool and a lifetime.
+# Pod metadata (labels, annotations such as io.katacontainers.*), env and
+# volumes are fixed by the template. The orchestrator is driven by an LLM, so
+# anything a claim can set is reachable by prompt injection.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sandboxes-claim-fields
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["extensions.agents.x-k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxclaims"]
+  validations:
+    - expression: >-
+        !has(object.spec.additionalPodMetadata) ||
+        ((!has(object.spec.additionalPodMetadata.labels) || size(object.spec.additionalPodMetadata.labels) == 0) &&
+         (!has(object.spec.additionalPodMetadata.annotations) || size(object.spec.additionalPodMetadata.annotations) == 0))
+      message: "SandboxClaim must not set additionalPodMetadata"
+    - expression: >-
+        !has(object.spec.env) || size(object.spec.env) == 0
+      message: "SandboxClaim must not set env"
+    - expression: >-
+        !has(object.spec.volumeClaimTemplates) || size(object.spec.volumeClaimTemplates) == 0
+      message: "SandboxClaim must not set volumeClaimTemplates"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sandboxes-claim-fields
+spec:
+  policyName: sandboxes-claim-fields
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: sandboxes
+---
+# sandboxes-pod-guard: no pod in the namespace gets Kubernetes credentials:
+# no automounted token, no other service account, no projected token volume.
+# Step 3 adds: runtimeClassName must be kata-clh.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sandboxes-pod-guard
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  validations:
+    - expression: >-
+        has(object.spec.automountServiceAccountToken) &&
+        object.spec.automountServiceAccountToken == false
+      message: "pods in sandboxes must set automountServiceAccountToken: false"
+    - expression: >-
+        !has(object.spec.serviceAccountName) || object.spec.serviceAccountName == 'default'
+      message: "pods in sandboxes must run as the default service account"
+    - expression: >-
+        !has(object.spec.volumes) || object.spec.volumes.all(v,
+          !has(v.projected) || !has(v.projected.sources) ||
+          v.projected.sources.all(s, !has(s.serviceAccountToken)))
+      message: "pods in sandboxes must not mount a projected service account token"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sandboxes-pod-guard
+spec:
+  policyName: sandboxes-pod-guard
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: sandboxes

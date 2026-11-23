@@ -1,0 +1,45 @@
+# Network lockdown for every pod in the sandboxes namespace.
+#
+# - Ingress: nothing allowed. enableDefaultDeny alone does not enforce ingress
+#   when the policy has no ingress rule (Cilium 1.20), so an explicit
+#   ingressDeny for all sources does it. Replies to allowed egress (DNS) are
+#   connection-tracked and not affected.
+# - Egress: only DNS to kube-dns, and only for cluster-internal names
+#   (<svc>.<ns>.svc.cluster.local, <ip>.<ns>.pod.cluster.local). In Cilium,
+#   `*` matches exactly one DNS label, so each name shape is listed.
+#   Cilium's DNS proxy answers REFUSED for anything else,
+#   so DNS cannot be used to reach or leak to the outside.
+# - Everything else (internet, GCE metadata server 169.254.169.254, API server,
+#   other pods and services) is dropped. Drops are visible with
+#   `hubble observe -n sandboxes --verdict DROPPED`.
+#
+# Allowed scan targets come later (roadmap phase 6) as extra egress rules.
+# Never add `ingress: [{}]` or `egress: [{}]`: an empty rule allows everything.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: sandboxes-default
+  namespace: sandboxes
+spec:
+  endpointSelector: {}
+  enableDefaultDeny:
+    ingress: true
+    egress: true
+  ingressDeny:
+    - fromEntities:
+        - all
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*.*.svc.cluster.local"
+              - matchPattern: "*.*.pod.cluster.local"

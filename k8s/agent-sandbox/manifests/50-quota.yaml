@@ -1,0 +1,18 @@
+# Caps for the sandboxes namespace, so runaway or prompt-injected tooling
+# cannot fill the node. Sized for one e2-medium worker (2 vCPU, 4 GB);
+# revisit with the dedicated sandbox node (step 3).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sandboxes
+  namespace: sandboxes
+spec:
+  hard:
+    count/sandboxclaims.extensions.agents.x-k8s.io: "5"
+    pods: "6"
+    requests.cpu: "1"
+    requests.memory: 1Gi
+    limits.cpu: "3"
+    limits.memory: 2Gi
+    requests.ephemeral-storage: 2Gi
+    limits.ephemeral-storage: 6Gi

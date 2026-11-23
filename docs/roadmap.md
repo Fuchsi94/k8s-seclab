@@ -31,14 +31,16 @@
 
 ## Phase 3 – Kubernetes Agent Sandbox
 
-- [ ] Agent Sandbox Controller und CRDs installieren
-- [ ] Sandbox Templates konfigurieren
+- [x] Agent Sandbox Controller und CRDs installieren
+- [x] Sandbox Templates konfigurieren
 - [ ] Dynamische Sandbox-Erstellung implementieren
-- [ ] Sandbox-Lifecycle (Create, Execute, Delete) testen
-- [ ] Automatische Bereinigung und Timeouts einrichten
-- [ ] Network Policies und RBAC konfigurieren
+- [x] Sandbox-Lifecycle (Create, Execute, Delete) testen
+- [x] Automatische Bereinigung und Timeouts einrichten
+- [x] Network Policies und RBAC konfigurieren
 
 **Meilenstein:** Sandboxes können dynamisch erstellt, genutzt und gelöscht werden.
+
+> Stand 2026-11-23: agent-sandbox v1.0.12 läuft (`k8s/agent-sandbox/`), noch ohne Kata (Phase 2). Bis dahin laufen Sandboxes als normale Container auf `w1`: kein fremder oder LLM-generierter Code darin.
 
 ## Phase 4 – Security Tools & MCP
 
@@ -52,6 +54,8 @@
 **Meilenstein:** Security-Scans können kontrolliert und isoliert ausgeführt werden.
 
 ## Phase 5 – LLM & Agent-Orchestrierung
+
+> Modell-Pod: nur `safetensors`-Gewichte (per Hash fixiert), kein `--trust-remote-code`, kein Root, read-only Dateisystem, kein ServiceAccount-Token, Metadata-Server gesperrt, Ingress nur vom Orchestrator, kein Egress. LLM-Gateway mit hartem Budget vor jedem Modell, das pro Token kostet.
 
 - [ ] Agent-Orchestrator implementieren
 - [ ] Externe LLM-API für erste Tests anbinden

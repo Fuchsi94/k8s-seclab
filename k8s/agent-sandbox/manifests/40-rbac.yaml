@@ -1,0 +1,39 @@
+# Identity for the future agent orchestrator (roadmap phase 5). It may request
+# and release sandboxes and run commands in them, nothing else: no secrets, no
+# templates, no policies, no plain pods, and only in the sandboxes namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sandbox-orchestrator
+  namespace: sandboxes
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sandbox-orchestrator
+  namespace: sandboxes
+rules:
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sandbox-orchestrator
+  namespace: sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: sandbox-orchestrator
+    namespace: sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sandbox-orchestrator
