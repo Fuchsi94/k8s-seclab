@@ -208,13 +208,41 @@ test_network() {
   kubectl delete ns sandbox-probe --wait=false >/dev/null 2>&1 || true
 }
 
+test_rbac() {
+  echo "rbac"
+  local sa=system:serviceaccount:sandboxes:sandbox-orchestrator
+  can()    { kubectl auth can-i --as="$sa" -n "${2:-$NS}" $1 >/dev/null 2>&1; }
+  local v
+  for v in "create sandboxclaims.extensions.agents.x-k8s.io" \
+           "delete sandboxclaims.extensions.agents.x-k8s.io" \
+           "create pods --subresource=exec" \
+           "list pods"; do
+    expect_ok "orchestrator may: $v" -- can "$v"
+  done
+  for v in "get secrets" \
+           "create pods" \
+           "update sandboxtemplates.extensions.agents.x-k8s.io" \
+           "delete ciliumnetworkpolicies.cilium.io"; do
+    expect_fail "orchestrator may not: $v" -- can "$v"
+  done
+  local p
+  p=$(kubectl -n "$NS" get pod -l app.kubernetes.io/part-of=agent-sandbox -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  expect_ok "orchestrator can really exec into a sandbox ($p)" -- \
+    kubectl --as="$sa" -n "$NS" exec "$p" -- true
+  expect_fail "orchestrator may not: exec into pods in default" -- \
+    can "create pods --subresource=exec" default
+  expect_fail "orchestrator may not: create sandboxclaims in default" -- \
+    can "create sandboxclaims.extensions.agents.x-k8s.io" default
+}
+
 main() {
   local section=${1:-all}
   case $section in
     controller) test_controller ;;
     lifecycle) test_lifecycle ;;
     network) test_network ;;
-    all) test_controller; test_lifecycle; test_network ;;
+    rbac) test_rbac ;;
+    all) test_controller; test_lifecycle; test_network; test_rbac ;;
     *) echo "unknown section: $section" >&2; exit 2 ;;
   esac
   if [[ $FAILED -ne 0 ]]; then echo "FAILED"; exit 1; fi
