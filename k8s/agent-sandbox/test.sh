@@ -52,7 +52,9 @@ test_controller() {
   if [[ $image == *v1.0.12* ]]; then pass "controller image is v1.0.12"; else fail "controller image is v1.0.12 (got '${image}')"; fi
 }
 
-CLAIMS=()
+# Every claim this script creates carries this label; cleanup deletes by label
+# (new_claim runs in a subshell, so a bash array would not survive).
+TEST_LABEL=app.kubernetes.io/managed-by=agent-sandbox-test
 
 # shutdown_in <seconds>: RFC3339 UTC timestamp <seconds> from now.
 shutdown_in() {
@@ -68,6 +70,8 @@ kind: SandboxClaim
 metadata:
   name: $1
   namespace: $NS
+  labels:
+    ${TEST_LABEL%%=*}: ${TEST_LABEL#*=}
 spec:
   warmPoolRef:
     name: default
@@ -88,10 +92,11 @@ claim_pod() {
 # new_claim <name> <seconds-until-shutdown>: create claim, wait until Ready, print pod name.
 new_claim() {
   local name=$1 secs=$2 pod
+  # A leftover claim with the same name would be reused and may expire mid-test.
+  kubectl -n "$NS" delete sandboxclaim "$name" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
   claim_yaml "$name" "  lifecycle:
     shutdownTime: \"$(shutdown_in "$secs")\"
     shutdownPolicy: Delete" | kubectl apply -f - >/dev/null
-  CLAIMS+=("$name")
   kubectl -n "$NS" wait sandboxclaim/"$name" --for=condition=Ready --timeout=120s >/dev/null
   for _ in $(seq 1 30); do
     pod=$(claim_pod "$name")
@@ -102,9 +107,7 @@ new_claim() {
 }
 
 cleanup_claims() {
-  for c in "${CLAIMS[@]+"${CLAIMS[@]}"}"; do
-    kubectl -n "$NS" delete sandboxclaim "$c" --ignore-not-found --wait=false >/dev/null 2>&1 || true
-  done
+  kubectl -n "$NS" delete sandboxclaim -l "$TEST_LABEL" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   kubectl -n "$NS" delete pod t-plain --ignore-not-found --wait=false >/dev/null 2>&1 || true
   kubectl delete ns sandbox-probe --ignore-not-found --wait=false >/dev/null 2>&1 || true
 }
@@ -166,7 +169,6 @@ test_lifecycle() {
     kubectl apply -f <(claim_yaml t-retain "  lifecycle:
     shutdownTime: \"$(shutdown_in 600)\"
     shutdownPolicy: Retain")
-  CLAIMS+=(t-nolife t-retain)
   expect_denied "plain pod with service account token is rejected" sandboxes-pod-guard -- \
     kubectl -n "$NS" run t-plain --image=busybox:1.37 --restart=Never -- sleep 60
 }
@@ -189,7 +191,7 @@ test_network() {
   # Probe pod outside the sandbox namespace (no policy): positive controls.
   kubectl create ns sandbox-probe >/dev/null 2>&1 || true
   kubectl -n sandbox-probe run probe --image=busybox:1.37 --restart=Never -- sleep 600 >/dev/null 2>&1 || true
-  kubectl -n sandbox-probe wait pod/probe --for=condition=Ready --timeout=90s >/dev/null
+  kubectl -n sandbox-probe wait pod/probe --for=condition=Ready --timeout=90s >/dev/null 2>&1 || fail "probe pod ready"
   local cip cpip
   cip=$(kubectl get svc kubernetes -n default -o jsonpath='{.spec.clusterIP}')
   cpip=$(kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
@@ -209,7 +211,7 @@ test_network() {
   else expect_fail "egress: other pods blocked (hubble-relay $relay)" -- sx "$pod" sh -c "nc -w 5 $relay 4245 </dev/null"; fi
 
   # Ingress: listener inside the sandbox, probe from another namespace.
-  kubectl -n "$NS" exec "$pod" -- sh -c 'nohup nc -lk -p 8080 -e echo ok >/dev/null 2>&1 &' >/dev/null 2>&1
+  kubectl -n "$NS" exec "$pod" -- sh -c 'nohup nc -lk -p 8080 -e echo ok >/dev/null 2>&1 &' >/dev/null 2>&1 || true
   expect_ok "listener answers inside the sandbox" -- gets_ok "$NS" "$pod" 127.0.0.1
   local ip
   ip=$(kubectl -n "$NS" get pod "$pod" -o jsonpath='{.status.podIP}')

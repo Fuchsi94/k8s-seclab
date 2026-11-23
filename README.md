@@ -73,20 +73,23 @@ runs in the cluster. Everything lives in `k8s/agent-sandbox/` (Kustomize):
 ```bash
 export KUBECONFIG=~/.kube/gcp-sec-lab
 kubectl apply --server-side -k k8s/agent-sandbox
-k8s/agent-sandbox/test.sh          # or: controller | lifecycle | network | rbac
+k8s/agent-sandbox/test.sh          # or: controller | guard | lifecycle | network | rbac
 ```
 
 `test.sh` checks the setup against the live cluster and exits 1 on any
 failure. The full run takes about 12 minutes (it waits for a sandbox to expire).
+Right after an apply, give the API server and Cilium a few seconds to load
+changed policies before running it.
 
 | File | What |
 |---|---|
 | `vendor/sandbox-with-extensions-v1.0.12.yaml` | Unmodified release manifest (controller + CRDs). Upgrade = replace the file, check the SHA-256 noted in `kustomization.yaml`. |
 | `manifests/00-namespace.yaml` | Namespace `sandboxes`, Pod Security `baseline` (root/`NET_RAW` allowed for scanners), warns on `restricted`. |
 | `manifests/10-network-policy.yaml` | No ingress. Egress only DNS for `*.*.svc.cluster.local` / `*.*.pod.cluster.local`. Internet, metadata server, API server and other pods are blocked. |
-| `manifests/20-admission.yaml` | Claims must have `shutdownTime` + `shutdownPolicy: Delete`. Pods must not mount a service account token. |
+| `manifests/20-admission.yaml` | Claims must expire (`shutdownTime` at most 24h after creation, `shutdownPolicy: Delete`) and may only set `warmPoolRef` + `lifecycle` (no pod metadata, env or volumes). Pods get no Kubernetes credentials (no token, no other service account, no projected token). |
 | `manifests/30-template.yaml` | `SandboxTemplate` + `SandboxWarmPool` `default` (one pre-started sandbox). |
 | `manifests/40-rbac.yaml` | ServiceAccount `sandbox-orchestrator`: may create/delete claims and exec into sandboxes, nothing else. |
+| `manifests/50-quota.yaml` | At most 5 claims / 6 pods, CPU, memory and ephemeral-storage caps (sized for `w1`). |
 
 A sandbox is requested with a claim on the warm pool:
 
@@ -100,7 +103,7 @@ spec:
   warmPoolRef:
     name: default
   lifecycle:
-    shutdownTime: "2026-11-23T12:00:00Z"   # required, the sandbox is deleted then
+    shutdownTime: "2026-11-23T12:00:00Z"   # required, at most 24h ahead; sandbox is deleted then
     shutdownPolicy: Delete                  # required
 ```
 
