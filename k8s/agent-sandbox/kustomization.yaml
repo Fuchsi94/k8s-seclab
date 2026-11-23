@@ -14,6 +14,7 @@ kind: Kustomization
 resources:
   - vendor/sandbox-with-extensions-v1.0.12.yaml
   - manifests/00-namespace.yaml
+  - manifests/10-network-policy.yaml
   - manifests/20-admission.yaml
   - manifests/30-template.yaml
 

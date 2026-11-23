@@ -106,6 +106,7 @@ cleanup_claims() {
     kubectl -n "$NS" delete sandboxclaim "$c" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   done
   kubectl -n "$NS" delete pod t-plain --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl delete ns sandbox-probe --ignore-not-found --wait=false >/dev/null 2>&1 || true
 }
 trap cleanup_claims EXIT
 
@@ -170,12 +171,50 @@ test_lifecycle() {
     kubectl -n "$NS" run t-plain --image=busybox:1.37 --restart=Never -- sleep 60
 }
 
+# sx <pod> <cmd...>: run a command in a sandbox pod, capped at 10 seconds.
+sx() { local pod=$1; shift; kubectl -n "$NS" exec "$pod" -- timeout 10 "$@"; }
+
+# gets_ok <probe-ns> <probe-pod> <ip>: true if <ip>:8080 answers "ok".
+gets_ok() {
+  local out
+  out=$(kubectl -n "$1" exec "$2" -- timeout 10 sh -c "nc -w 5 $3 8080 </dev/null" 2>/dev/null || true)
+  [[ $out == *ok* ]]
+}
+
+test_network() {
+  echo "network"
+  local pod
+  if ! pod=$(new_claim t-net 600); then fail "claim t-net is ready"; return; fi
+
+  expect_ok   "DNS: cluster name resolves" -- sx "$pod" nslookup kubernetes.default.svc.cluster.local
+  expect_fail "DNS: external name is refused" -- sx "$pod" nslookup example.com
+  expect_fail "egress: GCE metadata server blocked" -- \
+    sx "$pod" wget -q -T 5 -O- --header 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/
+  expect_fail "egress: internet blocked" -- sx "$pod" wget -q -T 5 -O- http://1.1.1.1
+  expect_fail "egress: API server blocked" -- sx "$pod" sh -c 'nc -w 5 kubernetes.default.svc 443 </dev/null'
+  local relay
+  relay=$(kubectl -n kube-system get pod -l k8s-app=hubble-relay -o jsonpath='{.items[0].status.podIP}')
+  expect_fail "egress: other pods blocked (hubble-relay $relay)" -- sx "$pod" sh -c "nc -w 5 $relay 4245 </dev/null"
+
+  # Ingress: listener inside the sandbox, probe from another namespace.
+  kubectl -n "$NS" exec "$pod" -- sh -c 'nohup nc -lk -p 8080 -e echo ok >/dev/null 2>&1 &' >/dev/null 2>&1
+  expect_ok "listener answers inside the sandbox" -- gets_ok "$NS" "$pod" 127.0.0.1
+  kubectl create ns sandbox-probe >/dev/null 2>&1 || true
+  kubectl -n sandbox-probe run probe --image=busybox:1.37 --restart=Never -- sleep 600 >/dev/null 2>&1 || true
+  kubectl -n sandbox-probe wait pod/probe --for=condition=Ready --timeout=90s >/dev/null
+  local ip
+  ip=$(kubectl -n "$NS" get pod "$pod" -o jsonpath='{.status.podIP}')
+  expect_fail "ingress: sandbox not reachable from other pods" -- gets_ok sandbox-probe probe "$ip"
+  kubectl delete ns sandbox-probe --wait=false >/dev/null 2>&1 || true
+}
+
 main() {
   local section=${1:-all}
   case $section in
     controller) test_controller ;;
     lifecycle) test_lifecycle ;;
-    all) test_controller; test_lifecycle ;;
+    network) test_network ;;
+    all) test_controller; test_lifecycle; test_network ;;
     *) echo "unknown section: $section" >&2; exit 2 ;;
   esac
   if [[ $FAILED -ne 0 ]]; then echo "FAILED"; exit 1; fi
