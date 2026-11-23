@@ -65,6 +65,60 @@ Re-run the script by hand (e.g. after `kubeadm reset`):
 sudo google_metadata_script_runner startup
 ```
 
+## Sandboxes
+
+[agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) v1.0.12
+runs in the cluster. Everything lives in `k8s/agent-sandbox/` (Kustomize):
+
+```bash
+export KUBECONFIG=~/.kube/gcp-sec-lab
+kubectl apply --server-side -k k8s/agent-sandbox
+k8s/agent-sandbox/test.sh          # or: controller | lifecycle | network | rbac
+```
+
+`test.sh` checks the setup against the live cluster and exits 1 on any
+failure. The full run takes about 12 minutes (it waits for a sandbox to expire).
+
+| File | What |
+|---|---|
+| `vendor/sandbox-with-extensions-v1.0.12.yaml` | Unmodified release manifest (controller + CRDs). Upgrade = replace the file, check the SHA-256 noted in `kustomization.yaml`. |
+| `manifests/00-namespace.yaml` | Namespace `sandboxes`, Pod Security `baseline` (root/`NET_RAW` allowed for scanners), warns on `restricted`. |
+| `manifests/10-network-policy.yaml` | No ingress. Egress only DNS for `*.*.svc.cluster.local` / `*.*.pod.cluster.local`. Internet, metadata server, API server and other pods are blocked. |
+| `manifests/20-admission.yaml` | Claims must have `shutdownTime` + `shutdownPolicy: Delete`. Pods must not mount a service account token. |
+| `manifests/30-template.yaml` | `SandboxTemplate` + `SandboxWarmPool` `default` (one pre-started sandbox). |
+| `manifests/40-rbac.yaml` | ServiceAccount `sandbox-orchestrator`: may create/delete claims and exec into sandboxes, nothing else. |
+
+A sandbox is requested with a claim on the warm pool:
+
+```yaml
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: my-sandbox
+  namespace: sandboxes
+spec:
+  warmPoolRef:
+    name: default
+  lifecycle:
+    shutdownTime: "2026-11-23T12:00:00Z"   # required, the sandbox is deleted then
+    shutdownPolicy: Delete                  # required
+```
+
+```bash
+kubectl -n sandboxes wait sandboxclaim/my-sandbox --for=condition=Ready
+kubectl -n sandboxes get pod -l agents.x-k8s.io/claim-uid=$(kubectl -n sandboxes get sandboxclaim my-sandbox -o jsonpath='{.metadata.uid}')
+kubectl -n sandboxes exec <pod> -- sh
+```
+
+Blocked connections show up in Hubble:
+`hubble observe --namespace sandboxes --verdict DROPPED` (on a node, via the
+cilium agent pod).
+
+**No Kata yet.** Sandboxes are plain `runc` containers on `w1` until the Kata
+step (roadmap phase 2). Do not run untrusted or LLM-generated code in them
+before that. The runtime is set in one place: the commented `patches` block in
+`kustomization.yaml`.
+
 ## Notes
 
 - The control plane public IP is **ephemeral**: it changes when the VM is
