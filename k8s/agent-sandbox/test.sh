@@ -145,8 +145,8 @@ test_lifecycle() {
     if [[ -z $rc ]]; then pass "no runtimeClassName yet (step 1)"; else fail "no runtimeClassName yet (got '$rc')"; fi
     expect_ok "automountServiceAccountToken is false" -- \
       test "$(kubectl -n "$NS" get pod "$pod" -o jsonpath='{.spec.automountServiceAccountToken}')" = false
-    expect_fail "no service account token in sandbox" -- \
-      kubectl -n "$NS" exec "$pod" -- ls /var/run/secrets/kubernetes.io/serviceaccount
+    expect_ok "no service account token in sandbox" -- \
+      kubectl -n "$NS" exec "$pod" -- sh -c 'test ! -e /var/run/secrets/kubernetes.io/serviceaccount'
     kubectl -n "$NS" delete sandboxclaim t-life --wait=false >/dev/null
     expect_ok "deleting the claim removes the pod" -- gone_within 60 "pod/$pod"
   else
@@ -186,22 +186,31 @@ test_network() {
   local pod
   if ! pod=$(new_claim t-net 600); then fail "claim t-net is ready"; return; fi
 
+  # Probe pod outside the sandbox namespace (no policy): positive controls.
+  kubectl create ns sandbox-probe >/dev/null 2>&1 || true
+  kubectl -n sandbox-probe run probe --image=busybox:1.37 --restart=Never -- sleep 600 >/dev/null 2>&1 || true
+  kubectl -n sandbox-probe wait pod/probe --for=condition=Ready --timeout=90s >/dev/null
+  local cip cpip
+  cip=$(kubectl get svc kubernetes -n default -o jsonpath='{.spec.clusterIP}')
+  cpip=$(kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+  expect_ok "control: probe outside sandboxes reaches API server $cip:443" -- \
+    kubectl -n sandbox-probe exec probe -- timeout 10 sh -c "nc -w 5 $cip 443 </dev/null"
+
   expect_ok   "DNS: cluster name resolves" -- sx "$pod" nslookup kubernetes.default.svc.cluster.local
   expect_fail "DNS: external name is refused" -- sx "$pod" nslookup example.com
   expect_fail "egress: GCE metadata server blocked" -- \
     sx "$pod" wget -q -T 5 -O- --header 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/
   expect_fail "egress: internet blocked" -- sx "$pod" wget -q -T 5 -O- http://1.1.1.1
-  expect_fail "egress: API server blocked" -- sx "$pod" sh -c 'nc -w 5 kubernetes.default.svc 443 </dev/null'
+  expect_fail "egress: API server blocked (service IP $cip:443)" -- sx "$pod" sh -c "nc -w 5 $cip 443 </dev/null"
+  expect_fail "egress: API server blocked (node $cpip:6443)" -- sx "$pod" sh -c "nc -w 5 $cpip 6443 </dev/null"
   local relay
   relay=$(kubectl -n kube-system get pod -l k8s-app=hubble-relay -o jsonpath='{.items[0].status.podIP}')
-  expect_fail "egress: other pods blocked (hubble-relay $relay)" -- sx "$pod" sh -c "nc -w 5 $relay 4245 </dev/null"
+  if [[ -z $relay ]]; then fail "hubble-relay pod IP found"
+  else expect_fail "egress: other pods blocked (hubble-relay $relay)" -- sx "$pod" sh -c "nc -w 5 $relay 4245 </dev/null"; fi
 
   # Ingress: listener inside the sandbox, probe from another namespace.
   kubectl -n "$NS" exec "$pod" -- sh -c 'nohup nc -lk -p 8080 -e echo ok >/dev/null 2>&1 &' >/dev/null 2>&1
   expect_ok "listener answers inside the sandbox" -- gets_ok "$NS" "$pod" 127.0.0.1
-  kubectl create ns sandbox-probe >/dev/null 2>&1 || true
-  kubectl -n sandbox-probe run probe --image=busybox:1.37 --restart=Never -- sleep 600 >/dev/null 2>&1 || true
-  kubectl -n sandbox-probe wait pod/probe --for=condition=Ready --timeout=90s >/dev/null
   local ip
   ip=$(kubectl -n "$NS" get pod "$pod" -o jsonpath='{.status.podIP}')
   expect_fail "ingress: sandbox not reachable from other pods" -- gets_ok sandbox-probe probe "$ip"
@@ -235,6 +244,75 @@ test_rbac() {
     can "create sandboxclaims.extensions.agents.x-k8s.io" default
 }
 
+# pod_yaml <extra-spec-yaml>: pod in sandboxes with automount off plus extras.
+pod_yaml() {
+  cat <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: t-guard
+  namespace: $NS
+spec:
+  automountServiceAccountToken: false
+$1
+  containers:
+    - name: c
+      image: busybox:1.37
+      command: ["sleep", "60"]
+EOF
+}
+
+# Admission rules and quota, all checks as server-side dry-run (fast, no side effects).
+test_guard() {
+  echo "guard"
+  local life="  lifecycle:
+    shutdownTime: \"$(shutdown_in 600)\"
+    shutdownPolicy: Delete"
+  expect_ok "claim within 24h is accepted (dry-run)" -- \
+    kubectl apply --dry-run=server -f <(claim_yaml t-ok "$life")
+  expect_denied "claim living longer than 24h is rejected" sandboxes-claim-lifecycle -- \
+    kubectl apply --dry-run=server -f <(claim_yaml t-long "  lifecycle:
+    shutdownTime: \"$(shutdown_in 90000)\"
+    shutdownPolicy: Delete")
+  expect_denied "claim with additionalPodMetadata is rejected" sandboxes-claim-fields -- \
+    kubectl apply --dry-run=server -f <(claim_yaml t-meta "$life
+  additionalPodMetadata:
+    annotations:
+      io.katacontainers.config.hypervisor.kernel_params: x")
+  expect_denied "claim with env is rejected" sandboxes-claim-fields -- \
+    kubectl apply --dry-run=server -f <(claim_yaml t-env "$life
+  env:
+    - name: LD_PRELOAD
+      value: /tmp/x.so")
+  expect_denied "claim with volumeClaimTemplates is rejected" sandboxes-claim-fields -- \
+    kubectl apply --dry-run=server -f <(claim_yaml t-vol "$life
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        volumeName: someone-elses-pv
+        resources:
+          requests:
+            storage: 1Gi")
+  expect_denied "pod running as another service account is rejected" sandboxes-pod-guard -- \
+    kubectl apply --dry-run=server -f <(pod_yaml "  serviceAccountName: sandbox-orchestrator")
+  expect_denied "pod with projected service account token is rejected" sandboxes-pod-guard -- \
+    kubectl apply --dry-run=server -f <(pod_yaml "  volumes:
+    - name: tok
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token")
+
+  local hard
+  hard=$(kubectl -n "$NS" get resourcequota sandboxes -o jsonpath='{.spec.hard.count/sandboxclaims\.extensions\.agents\.x-k8s\.io}' 2>/dev/null || true)
+  if [[ $hard == 5 ]]; then pass "quota: at most 5 claims"; else fail "quota: at most 5 claims (got '${hard}')"; fi
+  local eph
+  eph=$(kubectl -n "$NS" get sandboxtemplate default -o jsonpath='{.spec.podTemplate.spec.containers[0].resources.limits.ephemeral-storage}' 2>/dev/null || true)
+  if [[ -n $eph ]]; then pass "template limits ephemeral storage ($eph)"; else fail "template limits ephemeral storage"; fi
+}
+
 main() {
   local section=${1:-all}
   case $section in
@@ -242,7 +320,8 @@ main() {
     lifecycle) test_lifecycle ;;
     network) test_network ;;
     rbac) test_rbac ;;
-    all) test_controller; test_lifecycle; test_network; test_rbac ;;
+    guard) test_guard ;;
+    all) test_controller; test_guard; test_lifecycle; test_network; test_rbac ;;
     *) echo "unknown section: $section" >&2; exit 2 ;;
   esac
   if [[ $FAILED -ne 0 ]]; then echo "FAILED"; exit 1; fi

@@ -18,6 +18,7 @@ resources:
   - manifests/20-admission.yaml
   - manifests/30-template.yaml
   - manifests/40-rbac.yaml
+  - manifests/50-quota.yaml
 
 # Runtime for sandbox pods. Step 1: no runtimeClassName (runc). Step 3 (Kata):
 # uncomment and set the value to kata-clh.
